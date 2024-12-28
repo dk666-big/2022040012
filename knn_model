@@ -1,0 +1,205 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, precision_score, recall_score, classification_report
+from sklearn.metrics import confusion_matrix
+from sklearn.model_selection import train_test_split
+import joblib
+import os
+import time
+
+plt.rcParams['font.sans-serif'] = ['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
+
+
+def load_and_preprocess_data(train_path, test_path, chunk_size=1000):
+    """
+    加载并预处理训练集和测试集数据，包含分块读取、标准化处理
+    """
+    print("正在加载数据...")
+    # 分块读取和处理训练数据
+    chunks = []
+    for chunk in pd.read_csv(train_path, chunksize=chunk_size):
+        X_chunk = chunk.iloc[:, :-1].values
+        y_chunk = chunk.iloc[:, -1].values
+        chunks.append((X_chunk, y_chunk))
+    X_train = np.vstack([c[0] for c in chunks])
+    y_train = np.concatenate([c[1] for c in chunks])
+
+    # 同样分块处理测试数据
+    test_chunks = []
+    for chunk in pd.read_csv(test_path, chunksize=chunk_size):
+        test_chunks.append(chunk.values)
+    X_test = np.vstack(test_chunks)
+
+    # 使用增量式标准化
+    scaler = StandardScaler()
+    for i in range(0, len(X_train), chunk_size):
+        chunk = X_train[i:i + chunk_size]
+        scaler.partial_fit(chunk)
+    X_train = scaler.transform(X_train)
+    X_test = scaler.transform(X_test)
+
+    return X_train, y_train, X_test, scaler
+
+
+def save_model(model, path='DecisionTreeModel.pth'):
+    """保存模型到指定路径"""
+    print(f"正在保存模型到 {path}...")
+    joblib.dump(model, path)
+    print("模型保存完成")
+
+
+def train_optimized_knn(X_train, y_train, subsample_size=5000, n_neighbors=5):
+    """
+    训练优化后的K近邻模型，划分训练集和验证集，训练模型并返回相关数据
+    """
+    print("开始训练模型...")
+    start_time = time.time()
+
+    # 随机抽样以减少训练时间
+    indices = np.random.choice(len(X_train), subsample_size, replace=False)
+    X_train_sub = X_train[indices]
+    y_train_sub = y_train[indices]
+
+    X_train_final, X_val, y_train_final, y_val = train_test_split(
+        X_train_sub, y_train_sub, test_size=0.35, random_state=2
+    )
+
+    # 创建K近邻模型并训练
+    knn = KNeighborsClassifier(n_neighbors=n_neighbors)
+    knn.fit(X_train_final, y_train_final)
+
+    training_time = time.time() - start_time
+    print(f"模型训练完成，用时 {training_time:.2f} 秒")
+
+    return knn, X_val, y_val
+
+
+def evaluate_model(model, X_val, y_val):
+    """
+    评估模型在验证集上的准确率、精确率、召回率等指标并输出分类报告
+    """
+    print("\n正在评估指标...")
+    y_pred = model.predict(X_val)
+    accuracy = accuracy_score(y_val, y_pred)
+    precision = precision_score(y_val, y_pred, average='macro')
+    recall = recall_score(y_val, y_pred, average='macro')
+
+    chinese_class_names = ['飞机', '汽车', '鸟', '猫', '鹿', '狗', '青蛙', '马', '船', '卡车']
+    classification_rep = classification_report(y_val, y_pred, target_names=chinese_class_names)
+    print("\n分类报告:")
+    print(classification_rep)
+
+    print("\n模型评估指标:")
+    print(f"准确率: {accuracy:.4f}")
+    print(f"精确率: {precision:.4f}")
+    print(f"召回率: {recall:.4f}")
+
+    return y_pred
+
+
+def predict_test_set(model, X_test, output_path='knn_predictions.csv'):
+    """
+    使用模型对测试集进行预测并保存结果
+    """
+    print("\n开始对测试集进行预测...")
+    y_pred = model.predict(X_test)
+    predictions_df = pd.DataFrame({'prediction': y_pred})
+    predictions_df.to_csv(output_path, index=False)
+    print(f"预测结果已保存至 '{output_path}'")
+
+
+def plot_confusion_matrix(y_true, y_pred, class_names):
+    """
+    绘制混淆矩阵可视化图表
+    """
+    cm = confusion_matrix(y_true, y_pred)
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=class_names,
+                yticklabels=class_names)
+    plt.title('混淆矩阵')
+    plt.xlabel('预测标签')
+    plt.ylabel('真实标签')
+    plt.show()
+
+
+def train_and_plot_accuracy_curve_knn(X_train, y_train, num_steps=10, subsample_size=5000, n_neighbors=5):
+    """
+    训练K近邻模型并绘制训练步骤中准确率的变化曲线，通过改变训练数据比例观察准确率变化
+    """
+    accuracies = []
+    sizes = np.linspace(0.1, 1.0, num_steps)
+    for size in sizes:
+        indices = np.random.choice(len(X_train), int(subsample_size * size), replace=False)
+        X_train_sub = X_train[indices]
+        y_train_sub = y_train[indices]
+
+        X_train_final, X_val, y_train_final, y_val = train_test_split(
+            X_train_sub, y_train_sub, test_size=0.35, random_state=2
+        )
+
+        knn = KNeighborsClassifier(n_neighbors=n_neighbors)
+        knn.fit(X_train_final, y_train_final)
+
+        y_pred = knn.predict(X_val)
+        accuracy = accuracy_score(y_val, y_pred)
+        accuracies.append(accuracy)
+
+    plt.figure(figsize=(8, 6))
+    plt.title('训练步骤中准确率的变化（K近邻模型）')
+    plt.xlabel('训练数据比例')
+    plt.ylabel('验证集准确率')
+    plt.plot(sizes, accuracies, marker='o')
+    plt.grid(True)
+    plt.show()
+
+
+def main():
+    train_path = r"C:\Users\29430\Desktop\机器学习\Cifar-10数据集—训练集\train.csv"
+    test_path = r"C:\Users\29430\Desktop\机器学习\Cifar-10数据集—测试集\test.csv"
+    model_path = 'KNNModel.pth'
+
+    X_train, y_train, X_test, scaler = load_and_preprocess_data(train_path, test_path)
+    # 检查是否存在已训练的模型
+    if os.path.exists(model_path):
+        choice = input("发现已训练的模型，是否使用已有模型？(y/n)").lower()
+        if choice == 'y':
+            model = load_model(model_path)
+            indices = np.random.choice(len(X_train), 5000, replace=False)
+            X_val = X_train[indices]
+            y_val = y_train[indices]
+        else:
+            model, X_val, y_val = train_optimized_knn(X_train, y_train)
+            save_model(model, model_path)
+    else:
+        model, X_val, y_val = train_optimized_knn(X_train, y_train)
+        save_model(model, model_path)
+
+    y_pred = evaluate_model(model, X_val, y_val)
+
+    # 绘制混淆矩阵
+    class_names = ['飞机', '汽车', '鸟', '猫', '鹿', '狗', '青蛙', '马', '船', '卡车']
+    plot_confusion_matrix(y_val, y_pred, class_names)
+
+    # 预测测试集
+    predict_test_set(model, X_test)
+
+    # 绘制准确率变化曲线
+    train_and_plot_accuracy_curve_knn(X_train, y_train)
+
+
+def load_model(path='KNNModel.pth'):
+    """从指定路径加载模型"""
+    print(f"正在加载模型从 {path}...")
+    model = joblib.load(path)
+    print("模型加载完成")
+    return model
+
+
+if __name__ == "__main__":
+    main()
