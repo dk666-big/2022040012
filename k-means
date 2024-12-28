@@ -1,0 +1,148 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, precision_score, recall_score, classification_report
+from sklearn.metrics import confusion_matrix
+import joblib
+import os
+import time
+
+plt.rcParams['font.sans-serif'] = ['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
+
+
+def load_and_preprocess_data(train_path, test_path, chunk_size=1000):
+    """
+    加载并预处理训练集和测试集数据，包含分块读取、标准化处理
+    """
+    print("正在加载数据...")
+    # 分块读取和处理训练数据
+    chunks = []
+    for chunk in pd.read_csv(train_path, chunksize=chunk_size):
+        X_chunk = chunk.iloc[:, :-1].values
+        y_chunk = chunk.iloc[:, -1].values
+        chunks.append((X_chunk, y_chunk))
+    X_train = np.vstack([c[0] for c in chunks])
+    y_train = np.concatenate([c[1] for c in chunks])
+
+    # 同样分块处理测试数据
+    test_chunks = []
+    for chunk in pd.read_csv(test_path, chunksize=chunk_size):
+        test_chunks.append(chunk.values)
+    X_test = np.vstack(test_chunks)
+
+    # 使用增量式标准化
+    scaler = StandardScaler()
+    for i in range(0, len(X_train), chunk_size):
+        chunk = X_train[i:i + chunk_size]
+        scaler.partial_fit(chunk)
+    X_train = scaler.transform(X_train)
+    X_test = scaler.transform(X_test)
+
+    return X_train, y_train, X_test, scaler
+
+
+def save_model(model, path='KMeansModel.pth'):
+    """保存模型到指定路径"""
+    print(f"正在保存模型到 {path}...")
+    joblib.dump(model, path)
+    print("模型保存完成")
+
+
+def train_optimized_kmeans(X_train, y_train, n_clusters=10):
+    """
+    训练优化后的K-means模型，返回模型和中心点
+    """
+    print("开始训练K-means模型...")
+    start_time = time.time()
+
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    kmeans.fit(X_train)
+
+    training_time = time.time() - start_time
+    print(f"模型训练完成，用时 {training_time:.2f} 秒")
+
+    return kmeans, kmeans.labels_, training_time
+
+
+def evaluate_model(y_train, labels, class_names):
+    """
+    评估模型在训练集上的准确率、精确率、召回率等指标并输出分类报告
+    """
+    print("\n正在评估指标...")
+    accuracy = accuracy_score(y_train, labels)
+    precision = precision_score(y_train, labels, average='macro')
+    recall = recall_score(y_train, labels, average='macro')
+
+    classification_rep = classification_report(y_train, labels, target_names=class_names)
+    print("\n分类报告:")
+    print(classification_rep)
+
+    print("\n模型评估指标:")
+    print(f"准确率: {accuracy:.4f}")
+    print(f"精确率: {precision:.4f}")
+    print(f"召回率: {recall:.4f}")
+
+    return labels
+
+
+def predict_test_set(model, X_test, class_names, output_path='predictions.csv'):
+    """
+    使用模型对测试集进行预测并保存结果
+    """
+    print("\n开始对测试集进行预测...")
+    labels = model.predict(X_test)
+    predictions_df = pd.DataFrame({'prediction': labels})
+    predictions_df.to_csv(output_path, index=False)
+    print(f"预测结果已保存至 '{output_path}'")
+
+
+def plot_confusion_matrix(y_true, y_pred, class_names):
+    """
+    绘制混淆矩阵可视化图表
+    """
+    cm = confusion_matrix(y_true, y_pred)
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=class_names,
+                yticklabels=class_names)
+    plt.title('混淆矩阵')
+    plt.xlabel('预测标签')
+    plt.ylabel('真实标签')
+    plt.show()
+
+
+def main():
+    train_path = r"C:\Users\29430\Desktop\机器学习\Cifar-10数据集—训练集\train.csv"
+    test_path = r"C:\Users\29430\Desktop\机器学习\Cifar-10数据集—测试集\test.csv"
+    model_path = 'KMeansModel.pth'
+
+    X_train, y_train, X_test, scaler = load_and_preprocess_data(train_path, test_path)
+    # 检查是否存在已训练的模型
+    if os.path.exists(model_path):
+        choice = input("发现已训练的模型，是否使用已有模型？(y/n)").lower()
+        if choice == 'y':
+            model = joblib.load(model_path)
+            # 我们需要对训练集进行预测以获取labels
+            labels = model.predict(X_train)
+        else:
+            model, labels, _ = train_optimized_kmeans(X_train, y_train)
+            save_model(model, model_path)
+    else:
+        model, labels, _ = train_optimized_kmeans(X_train, y_train)
+        save_model(model, model_path)
+
+    evaluate_model(y_train, labels, ['飞机', '汽车', '鸟', '猫', '鹿', '狗', '青蛙', '马', '船', '卡车'])
+
+    # 绘制混淆矩阵
+    plot_confusion_matrix(y_train, labels, ['飞机', '汽车', '鸟', '猫', '鹿', '狗', '青蛙', '马', '船', '卡车'])
+
+    # 预测测试集
+    predict_test_set(model, X_test, ['飞机', '汽车', '鸟', '猫', '鹿', '狗', '青蛙', '马', '船', '卡车'], 'kmeans_predictions.csv')
+
+
+if __name__ == "__main__":
+    main()
