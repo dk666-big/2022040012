@@ -1,0 +1,169 @@
+import numpy as np
+import pandas as pd
+import os
+import matplotlib.pyplot as plt
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, precision_score, recall_score, classification_report
+from sklearn.metrics import confusion_matrix
+from sklearn.model_selection import train_test_split
+import joblib
+import time
+
+plt.rcParams['font.sans-serif'] = ['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
+
+def load_and_preprocess_data(train_path, test_path, chunk_size=1000):
+    """
+    加载并预处理训练集和测试集数据，包含分块读取、标准化处理
+    """
+    print("正在加载数据...")
+    chunks = []
+    for chunk in pd.read_csv(train_path, chunksize=chunk_size, encoding='utf-8'):
+        X_chunk = chunk.iloc[:, :-1].values
+        y_chunk = chunk.iloc[:, -1].values
+        chunks.append((X_chunk, y_chunk))
+    X_train = np.vstack([c[0] for c in chunks])
+    y_train = np.concatenate([c[1] for c in chunks])
+
+    test_chunks = []
+    for chunk in pd.read_csv(test_path, chunksize=chunk_size, encoding='utf-8'):
+        test_chunks.append(chunk.values)
+    X_test = np.vstack(test_chunks)
+
+    scaler = StandardScaler()
+    for i in range(0, len(X_train), chunk_size):
+        chunk = X_train[i:i + chunk_size]
+        scaler.partial_fit(chunk)
+    X_train = scaler.transform(X_train)
+    X_test = scaler.transform(X_test)
+
+    return X_train, y_train, X_test, scaler
+
+def train_optimized_decision_tree(X_train, y_train, subsample_size=5000):
+    print("开始训练模型...")
+    start_time = time.time()
+
+    indices = np.random.choice(len(X_train), subsample_size, replace=False)
+    X_train_sub = X_train[indices]
+    y_train_sub = y_train[indices]
+
+    X_train_final, X_val, y_train_final, y_val = train_test_split(
+        X_train_sub, y_train_sub, test_size=0.35, random_state=2
+    )
+
+    decision_tree = DecisionTreeClassifier(max_depth=10, random_state=42)
+    decision_tree.fit(X_train_final, y_train_final)
+
+    training_time = time.time() - start_time
+    print(f"模型训练完成，用时 {training_time:.2f} 秒")
+
+    return decision_tree, X_val, y_val
+
+def evaluate_model(model, X_val, y_val):
+    """
+    评估模型在验证集上的准确率、精确率、召回率等指标并输出分类报告
+    """
+    print("\n正在评估指标...")
+    y_pred = model.predict(X_val)
+    accuracy = accuracy_score(y_val, y_pred)
+    precision = precision_score(y_val, y_pred, average='macro')
+    recall = recall_score(y_val, y_pred, average='macro')
+
+    chinese_class_names = ['飞机', '汽车', '鸟', '猫', '鹿', '狗', '青蛙', '马', '船', '卡车']
+    classification_rep = classification_report(y_val, y_pred, target_names=chinese_class_names)
+    print("\n分类报告:")
+    print(classification_rep)
+
+    print("\n模型评估指标:")
+    print(f"准确率: {accuracy:.4f}")
+    print(f"精确率: {precision:.4f}")
+    print(f"召回率: {recall:.4f}")
+
+    return y_pred
+
+def plot_confusion_matrix(y_true, y_pred, class_names):
+    """
+    绘制混淆矩阵
+    """
+    cm = confusion_matrix(y_true, y_pred)
+    plt.figure(figsize=(12, 10))
+    plt.title('混淆矩阵')
+    plt.xlabel('预测标签')
+    plt.ylabel('真实标签')
+    plt.xticks(range(len(class_names)), class_names, rotation=45)
+    plt.yticks(range(len(class_names)), class_names)
+    plt.imshow(cm, interpolation='nearest', cmap='Blues')
+    plt.colorbar()
+    thresh = cm.max() / 2.
+    for i in range(len(cm)):
+        for j in range(len(cm)):
+            plt.text(j, i, format(cm[i][j], 'd'),
+                     ha="center", va="center",
+                     color="white" if cm[i][j] > thresh else "black")
+    plt.tight_layout()
+    plt.show()
+
+def predict_test_set(model, X_test, output_path='decision_tree_predictions.csv'):
+    """
+    使用模型对测试集进行预测并保存结果
+    """
+    print("\n开始对测试集进行预测...")
+    y_pred = model.predict(X_test)
+    predictions_df = pd.DataFrame({'prediction': y_pred})
+    predictions_df.to_csv(output_path, index=False)
+    print(f"预测结果已保存至 '{output_path}'")
+
+def train_and_plot_accuracy_curve(X_train, y_train, num_steps=10, subsample_size=5000):
+    accuracies = []
+    sizes = np.linspace(0.1, 1.0, num_steps)
+
+    for size in sizes:
+        indices = np.random.choice(len(X_train), int(subsample_size * size), replace=False)
+        X_train_sub = X_train[indices]
+        y_train_sub = y_train[indices]
+
+        X_train_final, X_val, y_train_final, y_val = train_test_split(
+            X_train_sub, y_train_sub, test_size=0.35, random_state=2
+        )
+        model = DecisionTreeClassifier(max_depth=10, random_state=42)
+        model.fit(X_train_final, y_train_final)
+
+        y_pred = model.predict(X_val)
+        accuracy = accuracy_score(y_val, y_pred)
+        accuracies.append(accuracy)
+
+    plt.figure(figsize=(8, 6))
+    plt.title('训练步骤中准确率的变化(决策树模型）')
+    plt.xlabel('训练数据比例')
+    plt.ylabel('验证集准确率')
+    plt.plot(sizes, accuracies, marker='o')
+    plt.grid(True)
+    plt.show()
+
+def main():
+    train_path = r"C:\Users\29430\Desktop\机器学习\Cifar-10数据集—训练集\train.csv"
+    test_path = r"C:\Users\29430\Desktop\机器学习\Cifar-10数据集—测试集\test.csv"
+    model_path = 'DecisionTreeModel.pth'
+
+    X_train, y_train, X_test, scaler = load_and_preprocess_data(train_path, test_path)
+    model, X_val, y_val = train_optimized_decision_tree(X_train, y_train)
+
+    train_and_plot_accuracy_curve(X_train, y_train)
+
+    y_pred = evaluate_model(model, X_val, y_val)
+
+    class_names = ['飞机', '汽车', '鸟', '猫', '鹿', '狗', '青蛙', '马', '船', '卡车']
+    plot_confusion_matrix(y_val, y_pred, class_names)
+
+    predict_test_set(model, X_test)
+
+def load_model(path='DecisionTreeModel.pth'):
+    """从指定路径加载模型"""
+    print(f"正在加载模型从 {path}...")
+    model = joblib.load(path)
+    print("模型加载完成")
+    return model
+
+if __name__ == "__main__":
+    main()
